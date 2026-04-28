@@ -6,11 +6,22 @@ import { useAccount, useWalletClient } from "wagmi";
 
 import { supportedChain } from "@/lib/chains";
 import { formatAddress } from "@/lib/format";
+import type { ExecutionLogItem } from "@/lib/logs/execution-log";
+import { createExecutionLog } from "@/lib/logs/execution-log";
+import type { ExecutionMode } from "@/lib/mode/execution-mode";
+import { buildMockHash, mockWalletAddress } from "@/lib/mode/execution-mode";
 import { buildLabTypedData } from "@/lib/signing/typed-data";
+import { getUnixTimeMs, getUnixTimeNonce } from "@/lib/time/clock";
 import { isSupportedChain } from "@/lib/validation/chain";
 import { buildWeb3Error, classifyWeb3Error } from "@/lib/validation/errors";
 
-export function TypedDataSigner() {
+export function TypedDataSigner({
+  mode,
+  onLog
+}: {
+  mode: ExecutionMode;
+  onLog: (item: ExecutionLogItem) => void;
+}) {
   const { address, chainId, isConnected } = useAccount();
   const { data: walletClient } = useWalletClient({ chainId: supportedChain.id });
   const [purpose, setPurpose] = useState("I am testing typed-data signing on Sepolia.");
@@ -22,37 +33,60 @@ export function TypedDataSigner() {
     setError("");
     setSignature(undefined);
 
-    if (!isConnected || !address) {
-      setError(buildWeb3Error("WALLET_NOT_CONNECTED").message);
+    const signingAddress = mode === "mock" ? mockWalletAddress : address;
+
+    if (mode === "live" && (!isConnected || !address)) {
+      const classified = buildWeb3Error("WALLET_NOT_CONNECTED");
+      setError(classified.message);
+      log("error", "typed_data_signature_failed", classified.message, { errorCode: classified.code, mode });
       return;
     }
 
-    if (!isSupportedChain(chainId, supportedChain.id)) {
-      setError(buildWeb3Error("WRONG_CHAIN").message);
+    if (mode === "live" && !isSupportedChain(chainId, supportedChain.id)) {
+      const classified = buildWeb3Error("WRONG_CHAIN");
+      setError(classified.message);
+      log("error", "typed_data_signature_failed", classified.message, { errorCode: classified.code, mode });
       return;
     }
 
-    if (!walletClient) {
-      setError(buildWeb3Error("CLIENT_UNAVAILABLE").message);
+    if (mode === "live" && !walletClient) {
+      const classified = buildWeb3Error("CLIENT_UNAVAILABLE");
+      setError(classified.message);
+      log("error", "typed_data_signature_failed", classified.message, { errorCode: classified.code, mode });
       return;
     }
 
     try {
       setIsSigning(true);
-      const result = await walletClient.signTypedData(
-        buildLabTypedData({
-          wallet: address,
-          purpose,
-          nonce: BigInt(Date.now())
-        })
-      );
+      log("info", "typed_data_signature_requested", "Typed-data signature requested.", { mode });
+      const typedData = buildLabTypedData({
+        wallet: signingAddress ?? mockWalletAddress,
+        purpose,
+        nonce: getUnixTimeNonce()
+      });
+      const result =
+        mode === "mock"
+          ? buildMockHash(`typed-data-${purpose}-${getUnixTimeMs()}`)
+          : await walletClient!.signTypedData(typedData);
 
       setSignature(result);
+      log("success", "typed_data_signature_succeeded", "Typed-data signature succeeded.", { mode });
     } catch (err) {
-      setError(classifyWeb3Error(err).message);
+      const classified = classifyWeb3Error(err);
+      setError(classified.message);
+      log("error", "typed_data_signature_failed", classified.message, { errorCode: classified.code, mode });
     } finally {
       setIsSigning(false);
     }
+  }
+
+  function log(
+    level: ExecutionLogItem["level"],
+    eventType: ExecutionLogItem["eventType"],
+    message: string,
+    metadata?: Record<string, unknown>
+  ) {
+    onLog(createExecutionLog({ level, eventType, message, metadata }));
   }
 
   return (
@@ -61,7 +95,8 @@ export function TypedDataSigner() {
         <p className="eyebrow">EIP-712 signing</p>
         <h2>Typed-data signature</h2>
         <p className="muted">
-          Builds a deterministic typed-data payload in the signing library and requests a wallet signature.
+          Builds a deterministic typed-data payload in the signing library and requests a{" "}
+          {mode === "mock" ? "mock" : "wallet"} signature.
         </p>
       </div>
 
@@ -75,8 +110,8 @@ export function TypedDataSigner() {
           <strong>Sepolia ({supportedChain.id})</strong>
         </div>
         <div>
-          <span>Wallet</span>
-          <strong>{formatAddress(address)}</strong>
+          <span>Signer</span>
+          <strong>{formatAddress(mode === "mock" ? mockWalletAddress : address)}</strong>
         </div>
       </div>
 
@@ -85,8 +120,8 @@ export function TypedDataSigner() {
         <textarea value={purpose} onChange={(event) => setPurpose(event.target.value)} rows={4} />
       </label>
 
-      <button className="primary" type="button" onClick={signTypedData} disabled={isSigning || !isConnected}>
-        {isSigning ? "Waiting for wallet..." : "Sign typed data"}
+      <button className="primary" type="button" onClick={signTypedData} disabled={isSigning || (mode === "live" && !isConnected)}>
+        {isSigning ? "Signing..." : "Sign typed data"}
       </button>
 
       {signature ? (

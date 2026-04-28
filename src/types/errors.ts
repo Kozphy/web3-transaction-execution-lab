@@ -10,6 +10,16 @@ export type Web3ErrorCode =
   | "CLIENT_UNAVAILABLE"
   | "UNKNOWN";
 
+export type ErrorAnalyticsType =
+  | "rejected_signature"
+  | "wrong_chain"
+  | "invalid_recipient"
+  | "invalid_amount"
+  | "insufficient_funds"
+  | "rpc_network_failure"
+  | "reverted_transaction"
+  | "unknown";
+
 export type ClassifiedWeb3Error = {
   code: Web3ErrorCode;
   message: string;

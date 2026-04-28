@@ -1,15 +1,20 @@
 "use client";
 
 import { useAppKit } from "@reown/appkit/react";
+import { useEffect, useRef } from "react";
 import { useAccount, useBalance, useDisconnect, useSwitchChain } from "wagmi";
 
 import { supportedChain, supportedChainName } from "@/lib/chains";
 import { formatAddress } from "@/lib/format";
+import type { ExecutionLogItem } from "@/lib/logs/execution-log";
+import { createExecutionLog } from "@/lib/logs/execution-log";
+import type { ExecutionMode } from "@/lib/mode/execution-mode";
+import { getMockWalletSnapshot } from "@/lib/mode/execution-mode";
 import { formatEth } from "@/lib/tx/fees";
 import { isSupportedChain } from "@/lib/validation/chain";
 import { isProjectIdConfigured } from "@/lib/wagmi";
 
-export function WalletSummary() {
+export function WalletSummary({ mode, onLog }: { mode: ExecutionMode; onLog: (item: ExecutionLogItem) => void }) {
   const { open } = useAppKit();
   const { address, chain, chainId, isConnected } = useAccount();
   const { disconnect } = useDisconnect();
@@ -22,7 +27,43 @@ export function WalletSummary() {
     }
   });
 
-  const isWrongChain = isConnected && !isSupportedChain(chainId, supportedChain.id);
+  const previousAddress = useRef<string | undefined>(undefined);
+  const mockWallet = getMockWalletSnapshot();
+  const displayedAddress = mode === "mock" ? mockWallet.address : address;
+  const displayedChainId = mode === "mock" ? mockWallet.chainId : chainId;
+  const displayedNetworkName = mode === "mock" ? mockWallet.networkName : chain?.name;
+  const displayedBalance = mode === "mock" ? mockWallet.balanceWei : balance?.value;
+  const isWrongChain = mode === "live" && isConnected && !isSupportedChain(chainId, supportedChain.id);
+
+  useEffect(() => {
+    if (mode !== "live") {
+      previousAddress.current = undefined;
+      return;
+    }
+
+    if (address && previousAddress.current !== address) {
+      onLog(
+        createExecutionLog({
+          level: "success",
+          eventType: "wallet_connected",
+          message: "Wallet connected.",
+          metadata: { address }
+        })
+      );
+    }
+
+    if (!address && previousAddress.current) {
+      onLog(
+        createExecutionLog({
+          level: "info",
+          eventType: "wallet_disconnected",
+          message: "Wallet disconnected."
+        })
+      );
+    }
+
+    previousAddress.current = address;
+  }, [address, mode, onLog]);
 
   return (
     <section className="card hero-card">
@@ -38,15 +79,18 @@ export function WalletSummary() {
       {!isProjectIdConfigured ? (
         <div className="warning">
           Set <code>NEXT_PUBLIC_REOWN_PROJECT_ID</code> in <code>.env.local</code> to enable WalletConnect
-          production routing.
+          production routing in live mode.
         </div>
       ) : null}
 
       <div className="wallet-grid">
-        <Metric label="Address" value={formatAddress(address)} />
-        <Metric label="Chain ID" value={chainId ? String(chainId) : "Not connected"} />
-        <Metric label="Network" value={chain?.name ?? "Not connected"} />
-        <Metric label="Sepolia ETH Balance" value={isBalanceLoading ? "Loading..." : formatEth(balance?.value)} />
+        <Metric label="Address" value={formatAddress(displayedAddress)} />
+        <Metric label="Chain ID" value={displayedChainId ? String(displayedChainId) : "Not connected"} />
+        <Metric label="Network" value={displayedNetworkName ?? "Not connected"} />
+        <Metric
+          label="Sepolia ETH Balance"
+          value={mode === "live" && isBalanceLoading ? "Loading..." : formatEth(displayedBalance)}
+        />
       </div>
 
       {isWrongChain ? (
@@ -56,19 +100,22 @@ export function WalletSummary() {
       ) : null}
 
       <div className="button-row">
-        <button className="primary" type="button" onClick={() => open()}>
-          {isConnected ? "Manage Wallet" : "Connect Wallet"}
-        </button>
+        {mode === "live" ? (
+          <button className="primary" type="button" onClick={() => open()}>
+            {isConnected ? "Manage Wallet" : "Connect Wallet"}
+          </button>
+        ) : null}
         {isWrongChain ? (
           <button type="button" onClick={() => switchChain({ chainId: supportedChain.id })} disabled={isSwitching}>
             {isSwitching ? "Switching..." : `Switch to ${supportedChainName}`}
           </button>
         ) : null}
-        {isConnected ? (
+        {mode === "live" && isConnected ? (
           <button type="button" onClick={() => disconnect()}>
             Disconnect
           </button>
         ) : null}
+        {mode === "mock" ? <span className="pill mock">Wallet simulated</span> : null}
       </div>
     </section>
   );
